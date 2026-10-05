@@ -1,0 +1,8 @@
+dist/
+bin/
+*.exe
+*.test
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log

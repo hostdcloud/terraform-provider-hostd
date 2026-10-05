@@ -1,0 +1,34 @@
+---
+page_title: "{{.ProviderShortName}} Provider"
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.ProviderShortName}} Provider
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+{{ tffile .ExampleFile }}
+
+## Authentication
+
+The provider authenticates with an API key created in the hostd.cloud portal under **Settings → API Keys**. Set `api_key` or export `HOSTD_API_KEY`. `api_url` (or `HOSTD_API_URL`) defaults to `https://api.hostd.cloud`.
+
+The key acts with the access it was given when it was created:
+
+| Resource or data source | Required key access |
+|---|---|
+| `hostd_ssh_key` | SSH keys: write |
+| `hostd_project` | Allowed to create projects; the key gets full access to the projects it creates. Deleting a project needs full access to it. |
+| `hostd_vm` | Write access to the project; deleting a VM needs full access to it. |
+| `hostd_os_images` | Read access to the project |
+
+Read access is enough to refresh state.
+
+## Rate limits
+
+API keys are limited to 10 read requests per second and 90 write requests per minute per account. The provider waits and retries when the API answers `429 Too Many Requests`.
+
+{{ .SchemaMarkdown | trimspace }}
