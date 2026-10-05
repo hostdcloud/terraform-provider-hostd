@@ -3,12 +3,12 @@
 page_title: "hostd_vm Resource - hostd"
 subcategory: ""
 description: |-
-  A Public Cloud virtual machine. Creation waits until the VM is running; destroying hard-stops it first. CPU, RAM, disk, CPU class and networking can be changed in place (the API only allows lowering CPU or RAM on a stopped VM, 24 hours after create or the last increase). Import with <project_id>/<vmid>; os_image, ssh_key_ids and username are create-time inputs the API does not return. After an import, set os_image and ssh_key_ids in the configuration (they are recorded without replacing the VM) and omit username.
+  A Public Cloud virtual machine. Creation waits until the VM is running. If that call is interrupted, a VM with the same hostname in the project is kept instead of creating another. Destroying stops the VM, deletes its disks, and deletes all of its backups. Public addresses return to the pool unless retain_public_ips is true (a reserved IPv4 stays billed). Changing project_id, hostname, os_image, ssh_key_ids, username, wan_ip, or wan_ipv6 replaces the VM. For a production VM set lifecycle { prevent_destroy = true }. CPU, RAM, disk, CPU class and networking can be changed in place. Lowering CPU or RAM requires power_state stopped and is refused until 24 hours after create or the last increase. Import with <project_id>/<vmid>; os_image, ssh_key_ids and username are create-time inputs the API does not return. After an import, set os_image and ssh_key_ids in the configuration (they are recorded without replacing the VM) and omit username.
 ---
 
 # hostd_vm (Resource)
 
-A Public Cloud virtual machine. Creation waits until the VM is running; destroying hard-stops it first. CPU, RAM, disk, CPU class and networking can be changed in place (the API only allows lowering CPU or RAM on a stopped VM, 24 hours after create or the last increase). Import with `<project_id>/<vmid>`; `os_image`, `ssh_key_ids` and `username` are create-time inputs the API does not return. After an import, set `os_image` and `ssh_key_ids` in the configuration (they are recorded without replacing the VM) and omit `username`.
+A Public Cloud virtual machine. Creation waits until the VM is running. If that call is interrupted, a VM with the same hostname in the project is kept instead of creating another. Destroying stops the VM, deletes its disks, and deletes all of its backups. Public addresses return to the pool unless `retain_public_ips` is true (a reserved IPv4 stays billed). Changing `project_id`, `hostname`, `os_image`, `ssh_key_ids`, `username`, `wan_ip`, or `wan_ipv6` replaces the VM. For a production VM set `lifecycle { prevent_destroy = true }`. CPU, RAM, disk, CPU class and networking can be changed in place. Lowering CPU or RAM requires `power_state` `stopped` and is refused until 24 hours after create or the last increase. Import with `<project_id>/<vmid>`; `os_image`, `ssh_key_ids` and `username` are create-time inputs the API does not return. After an import, set `os_image` and `ssh_key_ids` in the configuration (they are recorded without replacing the VM) and omit `username`.
 
 ## Example Usage
 
@@ -21,6 +21,11 @@ resource "hostd_vm" "web" {
   cores       = 2
   ram_gb      = 4
   os_disk_gb  = 20
+
+  # Destroying this VM deletes its disks and every backup of it.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 output "web_ipv4" {
@@ -44,15 +49,43 @@ output "web_ipv4" {
 ### Optional
 
 - `cpu_mode` (String) CPU class: `light` or `regular` (default).
-- `lan_vnets` (Set of String) Names (VNet) of private networks to attach; each gets a free address.
+- `lan_interfaces` (Attributes List) Private networks to attach. `mode` `auto` takes a free address; `select` uses `ip`. When `wan_mode` is `off` and more than one network is attached, set `is_gateway` on exactly one. Create the networks in the portal first. (see [below for nested schema](#nestedatt--lan_interfaces))
+- `power_state` (String) `running` (default) or `stopped`. `stopped` shuts the guest down. Set it to `stopped` to lower CPU or RAM. The API also refuses that downgrade until 24 hours after the VM is created or CPU, RAM, or CPU class is increased.
+- `retain_public_ips` (Boolean) When destroying the VM, or turning public networking off, keep its public addresses reserved in the project. A reserved IPv4 stays billed. Defaults to false, which releases the addresses.
+- `timeouts` (Attributes) (see [below for nested schema](#nestedatt--timeouts))
 - `username` (String) Cloud-init username. Defaults to the OS image's default user.
+- `wan_ip` (String) Reserved project IPv4 to attach. Omit to take the next free address. Changing it replaces the VM.
+- `wan_ipv6` (String) Reserved project IPv6 to attach. Omit to take the next free address. Changing it replaces the VM.
 - `wan_mode` (String) Public network: `off`, `ipv4`, `ipv6` or `dual` (default). With `off`, attach at least one private network. Switching between `ipv4`, `ipv6` and `dual` requires going through `off`.
 
 ### Read-Only
 
-- `ipv4` (String) Public IPv4 address, empty when none is attached.
-- `ipv6` (String) Public IPv6 address, empty when none is attached.
+- `ipv4` (String) Public IPv4 address, empty when none is attached. Stays known in the plan while `wan_mode` does not change.
+- `ipv6` (String) Public IPv6 address, empty when none is attached. Stays known in the plan while `wan_mode` does not change.
 - `vmid` (Number) VM identifier (VMID) assigned by the API.
+
+<a id="nestedatt--lan_interfaces"></a>
+### Nested Schema for `lan_interfaces`
+
+Required:
+
+- `mode` (String) `auto` or `select`.
+- `vnet` (String) Private network name (VNet).
+
+Optional:
+
+- `ip` (String) IPv4 address. Required when `mode` is `select`.
+- `is_gateway` (Boolean) Use this network as the default gateway. Required on exactly one interface when WAN is off and several networks are attached.
+
+
+<a id="nestedatt--timeouts"></a>
+### Nested Schema for `timeouts`
+
+Optional:
+
+- `create` (String) How long to wait for creation and for `power_state`. Defaults to 10 minutes.
+- `delete` (String) How long to wait for the VM to stop and be deleted. Defaults to 10 minutes.
+- `update` (String) How long to wait for a resize, shutdown, or start. Defaults to 15 minutes.
 
 ## Import
 

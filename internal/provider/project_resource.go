@@ -6,7 +6,9 @@ package provider
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -31,11 +33,14 @@ type projectResource struct {
 	client *client.Client
 }
 
+const projectTimeout = 5 * time.Minute
+
 type projectResourceModel struct {
-	ID          types.String `tfsdk:"id"`
-	Name        types.String `tfsdk:"name"`
-	Description types.String `tfsdk:"description"`
-	ClusterName types.String `tfsdk:"cluster_name"`
+	ID          types.String   `tfsdk:"id"`
+	Name        types.String   `tfsdk:"name"`
+	Description types.String   `tfsdk:"description"`
+	ClusterName types.String   `tfsdk:"cluster_name"`
+	Timeouts    timeouts.Value `tfsdk:"timeouts"`
 }
 
 func (r *projectResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -57,9 +62,9 @@ func (r *projectResource) Configure(_ context.Context, req resource.ConfigureReq
 	r.client = c
 }
 
-func (r *projectResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *projectResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "A Public Cloud project. The API key must be allowed to create projects; it gets Full access to the projects it creates. A project can be deleted only after all its virtual machines and private networks are removed.",
+		MarkdownDescription: "A Public Cloud project. The API key must be allowed to create projects; it gets Full access to the projects it creates. If creation is interrupted, a project with the same name in the same cluster is kept instead of creating another. A project can be deleted only after all its virtual machines and private networks are removed.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -85,6 +90,14 @@ func (r *projectResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
+			"timeouts": timeouts.Attributes(ctx, timeouts.Opts{
+				Create:            true,
+				Update:            true,
+				Delete:            true,
+				CreateDescription: "How long to wait for the project to be created. Defaults to 5 minutes.",
+				UpdateDescription: "How long to wait for the project to be updated. Defaults to 5 minutes.",
+				DeleteDescription: "How long to wait for the project to be deleted. Defaults to 5 minutes.",
+			}),
 		},
 	}
 }
@@ -95,6 +108,11 @@ func (r *projectResource) Create(ctx context.Context, req resource.CreateRequest
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	ctx, cancel, ok := operationContext(ctx, data.Timeouts.Create, projectTimeout, &resp.Diagnostics)
+	if !ok {
+		return
+	}
+	defer cancel()
 
 	project, err := r.client.CreateProject(ctx, data.ClusterName.ValueString(), data.Name.ValueString(), data.Description.ValueString())
 	if err != nil {
@@ -143,6 +161,11 @@ func (r *projectResource) Update(ctx context.Context, req resource.UpdateRequest
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	ctx, cancel, ok := operationContext(ctx, data.Timeouts.Update, projectTimeout, &resp.Diagnostics)
+	if !ok {
+		return
+	}
+	defer cancel()
 
 	_, err := r.client.UpdateProject(ctx, data.ID.ValueString(), data.Name.ValueString(), data.Description.ValueString())
 	if err != nil {
@@ -162,6 +185,11 @@ func (r *projectResource) Delete(ctx context.Context, req resource.DeleteRequest
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	ctx, cancel, ok := operationContext(ctx, data.Timeouts.Delete, projectTimeout, &resp.Diagnostics)
+	if !ok {
+		return
+	}
+	defer cancel()
 
 	err := r.client.DeleteProject(ctx, data.ID.ValueString())
 	if err != nil && !client.IsNotFound(err) {

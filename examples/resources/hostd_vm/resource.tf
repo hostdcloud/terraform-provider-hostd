@@ -6,6 +6,11 @@ resource "hostd_vm" "web" {
   cores       = 2
   ram_gb      = 4
   os_disk_gb  = 20
+
+  # Destroying this VM deletes its disks and every backup of it.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 output "web_ipv4" {

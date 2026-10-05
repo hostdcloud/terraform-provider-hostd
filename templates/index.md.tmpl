@@ -14,7 +14,7 @@ description: |-
 
 ## Authentication
 
-The provider authenticates with an API key created in the hostd.cloud portal under **Settings → API Keys**. Set `api_key` or export `HOSTD_API_KEY`. `api_url` (or `HOSTD_API_URL`) defaults to `https://api.hostd.cloud`.
+The provider authenticates with an API key created in the hostd.cloud portal under **Settings → API Keys**. Set `api_key` or export `HOSTD_API_KEY`. `api_url` (or `HOSTD_API_URL`) is an absolute `http` or `https` URL without a path and defaults to `https://api.hostd.cloud`. Terraform checks the key when it starts; an invalid key fails the plan before any resource changes.
 
 The key acts with the access it was given when it was created:
 
@@ -23,12 +23,29 @@ The key acts with the access it was given when it was created:
 | `hostd_ssh_key` | SSH keys: write |
 | `hostd_project` | Allowed to create projects; the key gets full access to the projects it creates. Deleting a project needs full access to it. |
 | `hostd_vm` | Write access to the project; deleting a VM needs full access to it. |
+| `hostd_ip_set`, `hostd_ip_set_member` | Write access to the project. Deleting a set removes firewall rules that reference it. |
+| `hostd_security_group`, `hostd_security_group_rule` | Write access to the project. Deleting a group detaches it from every VM. Rules are ordered by `position`. |
+| `hostd_vm_firewall_options`, `hostd_vm_firewall_rule` | Write access to the project. The firewall filters the VM's public interface. `type = group` attaches a security group. |
 | `hostd_os_images` | Read access to the project |
+| `hostd_public_ips`, `hostd_public_ip_ptr` | Read to list addresses. Changing a PTR needs Write. |
+| `hostd_private_networks`, `hostd_ip_addresses` | Read. Private networks include free addresses for `lan_interfaces`. |
 
-Read access is enough to refresh state.
+Read access is enough to refresh state. A shared project where your role is auditor can only be Read: the key cannot do more than your role, and a write fails with a permissions error.
+
+Use a separate key for each Terraform workspace, and set it only with `HOSTD_API_KEY` (a CI secret), not in the configuration. Prefer a key that expires in 30 or 90 days: create the next key, update the secret, then delete the old one. In Settings → API Keys, **Terraform** fills a new key for apply and destroy (90 days, create projects, SSH keys Write, Full on projects you can write).
+
+| Terraform command | Minimum access |
+|---|---|
+| `plan` | Read on the project and on SSH keys |
+| `apply` | Write on the project, Write on SSH keys, and allowed to create projects |
+| `destroy` | Full on the project |
+
+## Replacing and destroying a VM
+
+Changing `project_id`, `hostname`, `os_image`, `ssh_key_ids`, `username`, `wan_ip`, or `wan_ipv6` replaces the VM. Destroying a VM deletes its disks and every backup of that VM. Public addresses return to the pool unless `retain_public_ips` is true (a reserved IPv4 stays billed). For a production VM set `lifecycle { prevent_destroy = true }`.
 
 ## Rate limits
 
-API keys are limited to 10 read requests per second and 90 write requests per minute per account. The provider waits and retries when the API answers `429 Too Many Requests`.
+API keys are limited to 10 read requests per second and 90 write requests per minute per account. The provider waits and retries `429 Too Many Requests` using `Retry-After`. GET requests are also retried on HTTP 5xx and network errors, for up to two minutes.
 
 {{ .SchemaMarkdown | trimspace }}

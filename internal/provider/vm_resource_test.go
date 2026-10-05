@@ -77,7 +77,7 @@ func TestAccVM_disappears(t *testing.T) {
 					if err != nil {
 						return err
 					}
-					return testAccClient().DestroyVM(context.Background(), rs.Primary.Attributes["project_id"], vmid)
+					return testAccClient().DestroyVM(context.Background(), rs.Primary.Attributes["project_id"], vmid, true)
 				},
 				ExpectNonEmptyPlan: true,
 			},

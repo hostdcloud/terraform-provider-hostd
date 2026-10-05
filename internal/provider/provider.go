@@ -5,6 +5,8 @@ package provider
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"os"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -43,18 +45,18 @@ func (p *hostdProvider) Metadata(_ context.Context, _ provider.MetadataRequest, 
 
 func (p *hostdProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "The hostd provider manages [hostd.cloud](https://hostd.cloud) Public Cloud — projects, SSH keys and virtual machines — through the public API.",
+		MarkdownDescription: "The hostd provider manages [hostd.cloud](https://hostd.cloud) Public Cloud — projects, SSH keys, virtual machines and their firewall — through the public API.",
 		Attributes: map[string]schema.Attribute{
 			// Authentication attributes are Optional (never Required) so
 			// environment variables can supply them; secrets are Sensitive.
 			"api_url": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "API base URL. Defaults to `" + defaultAPIURL + "`. May also be set via the `HOSTD_API_URL` environment variable.",
+				MarkdownDescription: "API host, an absolute `http` or `https` URL without a path. Defaults to `" + defaultAPIURL + "`. May also be set via the `HOSTD_API_URL` environment variable.",
 			},
 			"api_key": schema.StringAttribute{
 				Optional:            true,
 				Sensitive:           true,
-				MarkdownDescription: "API key created in the portal under Settings → API Keys. May also be set via the `HOSTD_API_KEY` environment variable.",
+				MarkdownDescription: "API key created in the portal under Settings → API Keys. Checked against the API when Terraform starts. May also be set via the `HOSTD_API_KEY` environment variable.",
 			},
 		},
 	}
@@ -108,8 +110,26 @@ func (p *hostdProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		)
 		return
 	}
+	if err := client.ValidateAPIURL(apiURL); err != nil {
+		resp.Diagnostics.AddAttributeError(path.Root("api_url"), "Invalid API URL", err.Error())
+		return
+	}
 
 	c := client.New(apiURL, apiKey, p.version)
+	if err := c.CheckAccess(ctx); err != nil {
+		summary := "Error checking API key"
+		var apiErr *client.Error
+		if errors.As(err, &apiErr) {
+			switch apiErr.Status {
+			case http.StatusUnauthorized:
+				summary = "Invalid API key"
+			case http.StatusForbidden:
+				summary = "API key has no access"
+			}
+		}
+		resp.Diagnostics.AddAttributeError(path.Root("api_key"), summary, err.Error())
+		return
+	}
 	resp.ResourceData = c
 	resp.DataSourceData = c
 }
@@ -119,11 +139,21 @@ func (p *hostdProvider) Resources(_ context.Context) []func() resource.Resource 
 		NewProjectResource,
 		NewSSHKeyResource,
 		NewVMResource,
+		NewIPSetResource,
+		NewIPSetMemberResource,
+		NewSecurityGroupResource,
+		NewSecurityGroupRuleResource,
+		NewVMFirewallOptionsResource,
+		NewVMFirewallRuleResource,
+		NewPublicIPPTRResource,
 	}
 }
 
 func (p *hostdProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewOSImagesDataSource,
+		NewPublicIPsDataSource,
+		NewPrivateNetworksDataSource,
+		NewIPAddressesDataSource,
 	}
 }

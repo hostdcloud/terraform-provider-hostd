@@ -11,16 +11,19 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -29,10 +32,31 @@ import (
 	"github.com/hostdcloud/terraform-provider-hostd/internal/client"
 )
 
+var lanInterfaceAttrTypes = map[string]attr.Type{
+	"vnet":       types.StringType,
+	"mode":       types.StringType,
+	"ip":         types.StringType,
+	"is_gateway": types.BoolType,
+}
+
+type lanInterfaceModel struct {
+	VNet      types.String `tfsdk:"vnet"`
+	Mode      types.String `tfsdk:"mode"`
+	IP        types.String `tfsdk:"ip"`
+	IsGateway types.Bool   `tfsdk:"is_gateway"`
+}
+
+const (
+	vmCreateTimeout = 10 * time.Minute
+	vmUpdateTimeout = 15 * time.Minute
+	vmDeleteTimeout = 10 * time.Minute
+)
+
 var (
 	_ resource.Resource                = &vmResource{}
 	_ resource.ResourceWithConfigure   = &vmResource{}
 	_ resource.ResourceWithImportState = &vmResource{}
+	_ resource.ResourceWithModifyPlan  = &vmResource{}
 )
 
 func NewVMResource() resource.Resource {
@@ -44,20 +68,25 @@ type vmResource struct {
 }
 
 type vmResourceModel struct {
-	ProjectID types.String `tfsdk:"project_id"`
-	VMID      types.Int64  `tfsdk:"vmid"`
-	Hostname  types.String `tfsdk:"hostname"`
-	OSImage   types.String `tfsdk:"os_image"`
-	Username  types.String `tfsdk:"username"`
-	SSHKeyIDs types.Set    `tfsdk:"ssh_key_ids"`
-	Cores     types.Int64  `tfsdk:"cores"`
-	RAMGB     types.Int64  `tfsdk:"ram_gb"`
-	OSDiskGB  types.Int64  `tfsdk:"os_disk_gb"`
-	CPUMode   types.String `tfsdk:"cpu_mode"`
-	WANMode   types.String `tfsdk:"wan_mode"`
-	LANVNets  types.Set    `tfsdk:"lan_vnets"`
-	IPv4      types.String `tfsdk:"ipv4"`
-	IPv6      types.String `tfsdk:"ipv6"`
+	ProjectID       types.String   `tfsdk:"project_id"`
+	VMID            types.Int64    `tfsdk:"vmid"`
+	Hostname        types.String   `tfsdk:"hostname"`
+	OSImage         types.String   `tfsdk:"os_image"`
+	Username        types.String   `tfsdk:"username"`
+	SSHKeyIDs       types.Set      `tfsdk:"ssh_key_ids"`
+	Cores           types.Int64    `tfsdk:"cores"`
+	RAMGB           types.Int64    `tfsdk:"ram_gb"`
+	OSDiskGB        types.Int64    `tfsdk:"os_disk_gb"`
+	CPUMode         types.String   `tfsdk:"cpu_mode"`
+	WANMode         types.String   `tfsdk:"wan_mode"`
+	WANIP           types.String   `tfsdk:"wan_ip"`
+	WANIPv6         types.String   `tfsdk:"wan_ipv6"`
+	RetainPublicIPs types.Bool     `tfsdk:"retain_public_ips"`
+	LANInterfaces   types.List     `tfsdk:"lan_interfaces"`
+	PowerState      types.String   `tfsdk:"power_state"`
+	IPv4            types.String   `tfsdk:"ipv4"`
+	IPv6            types.String   `tfsdk:"ipv6"`
+	Timeouts        timeouts.Value `tfsdk:"timeouts"`
 }
 
 func (r *vmResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -79,10 +108,12 @@ func (r *vmResource) Configure(_ context.Context, req resource.ConfigureRequest,
 	r.client = c
 }
 
-func (r *vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *vmResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "A Public Cloud virtual machine. Creation waits until the VM is running; destroying hard-stops it first. " +
-			"CPU, RAM, disk, CPU class and networking can be changed in place (the API only allows lowering CPU or RAM on a stopped VM, 24 hours after create or the last increase). " +
+		MarkdownDescription: "A Public Cloud virtual machine. Creation waits until the VM is running. If that call is interrupted, a VM with the same hostname in the project is kept instead of creating another. " +
+			"Destroying stops the VM, deletes its disks, and deletes all of its backups. Public addresses return to the pool unless `retain_public_ips` is true (a reserved IPv4 stays billed). " +
+			"Changing `project_id`, `hostname`, `os_image`, `ssh_key_ids`, `username`, `wan_ip`, or `wan_ipv6` replaces the VM. For a production VM set `lifecycle { prevent_destroy = true }`. " +
+			"CPU, RAM, disk, CPU class and networking can be changed in place. Lowering CPU or RAM requires `power_state` `stopped` and is refused until 24 hours after create or the last increase. " +
 			"Import with `<project_id>/<vmid>`; `os_image`, `ssh_key_ids` and `username` are create-time inputs the API does not return. After an import, set `os_image` and `ssh_key_ids` in the configuration (they are recorded without replacing the VM) and omit `username`.",
 		Attributes: map[string]schema.Attribute{
 			"project_id": schema.StringAttribute{
@@ -163,27 +194,99 @@ func (r *vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *r
 				Default:             stringdefault.StaticString("regular"),
 				MarkdownDescription: "CPU class: `light` or `regular` (default).",
 			},
+			"power_state": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				Default:             stringdefault.StaticString("running"),
+				MarkdownDescription: "`running` (default) or `stopped`. `stopped` shuts the guest down. Set it to `stopped` to lower CPU or RAM. The API also refuses that downgrade until 24 hours after the VM is created or CPU, RAM, or CPU class is increased.",
+				Validators: []validator.String{
+					stringvalidator.OneOf("running", "stopped"),
+				},
+			},
 			"wan_mode": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
 				Default:             stringdefault.StaticString("dual"),
 				MarkdownDescription: "Public network: `off`, `ipv4`, `ipv6` or `dual` (default). With `off`, attach at least one private network. Switching between `ipv4`, `ipv6` and `dual` requires going through `off`.",
 			},
-			"lan_vnets": schema.SetAttribute{
-				ElementType:         types.StringType,
+			"wan_ip": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "Reserved project IPv4 to attach. Omit to take the next free address. Changing it replaces the VM.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplaceIf(
+						func(_ context.Context, req planmodifier.StringRequest, resp *stringplanmodifier.RequiresReplaceIfFuncResponse) {
+							resp.RequiresReplace = !req.StateValue.IsNull()
+						},
+						"Changing the public IPv4 replaces the VM.",
+						"Changing the public IPv4 replaces the VM.",
+					),
+				},
+			},
+			"wan_ipv6": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "Reserved project IPv6 to attach. Omit to take the next free address. Changing it replaces the VM.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplaceIf(
+						func(_ context.Context, req planmodifier.StringRequest, resp *stringplanmodifier.RequiresReplaceIfFuncResponse) {
+							resp.RequiresReplace = !req.StateValue.IsNull()
+						},
+						"Changing the public IPv6 replaces the VM.",
+						"Changing the public IPv6 replaces the VM.",
+					),
+				},
+			},
+			"retain_public_ips": schema.BoolAttribute{
 				Optional:            true,
 				Computed:            true,
-				Default:             setdefault.StaticValue(types.SetValueMust(types.StringType, []attr.Value{})),
-				MarkdownDescription: "Names (VNet) of private networks to attach; each gets a free address.",
+				Default:             booldefault.StaticBool(false),
+				MarkdownDescription: "When destroying the VM, or turning public networking off, keep its public addresses reserved in the project. A reserved IPv4 stays billed. Defaults to false, which releases the addresses.",
+			},
+			"lan_interfaces": schema.ListNestedAttribute{
+				Optional: true,
+				MarkdownDescription: "Private networks to attach. `mode` `auto` takes a free address; `select` uses `ip`. " +
+					"When `wan_mode` is `off` and more than one network is attached, set `is_gateway` on exactly one. Create the networks in the portal first.",
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"vnet": schema.StringAttribute{
+							Required:            true,
+							MarkdownDescription: "Private network name (VNet).",
+						},
+						"mode": schema.StringAttribute{
+							Required:            true,
+							MarkdownDescription: "`auto` or `select`.",
+							Validators: []validator.String{
+								stringvalidator.OneOf("auto", "select"),
+							},
+						},
+						"ip": schema.StringAttribute{
+							Optional:            true,
+							MarkdownDescription: "IPv4 address. Required when `mode` is `select`.",
+						},
+						"is_gateway": schema.BoolAttribute{
+							Optional:            true,
+							Computed:            true,
+							Default:             booldefault.StaticBool(false),
+							MarkdownDescription: "Use this network as the default gateway. Required on exactly one interface when WAN is off and several networks are attached.",
+						},
+					},
+				},
 			},
 			"ipv4": schema.StringAttribute{
 				Computed:            true,
-				MarkdownDescription: "Public IPv4 address, empty when none is attached.",
+				MarkdownDescription: "Public IPv4 address, empty when none is attached. Stays known in the plan while `wan_mode` does not change.",
 			},
 			"ipv6": schema.StringAttribute{
 				Computed:            true,
-				MarkdownDescription: "Public IPv6 address, empty when none is attached.",
+				MarkdownDescription: "Public IPv6 address, empty when none is attached. Stays known in the plan while `wan_mode` does not change.",
 			},
+			"timeouts": timeouts.Attributes(ctx, timeouts.Opts{
+				Create:            true,
+				Update:            true,
+				Delete:            true,
+				CreateDescription: "How long to wait for creation and for `power_state`. Defaults to 10 minutes.",
+				UpdateDescription: "How long to wait for a resize, shutdown, or start. Defaults to 15 minutes.",
+				DeleteDescription: "How long to wait for the VM to stop and be deleted. Defaults to 10 minutes.",
+			}),
 		},
 	}
 }
@@ -205,12 +308,25 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 		OSImage:  data.OSImage.ValueString(),
 		CPUMode:  data.CPUMode.ValueString(),
 		WANMode:  data.WANMode.ValueString(),
+		WANIP:    data.WANIP.ValueString(),
+		WANIPv6:  data.WANIPv6.ValueString(),
 	}
 	resp.Diagnostics.Append(data.SSHKeyIDs.ElementsAs(ctx, &in.SSHKeyIDs, false)...)
-	resp.Diagnostics.Append(data.LANVNets.ElementsAs(ctx, &in.LANVNets, false)...)
+	var lanDiags diag.Diagnostics
+	in.LANInterfaces, lanDiags = data.lanClients(ctx)
+	resp.Diagnostics.Append(lanDiags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	if msg := data.lanError(ctx); msg != "" {
+		resp.Diagnostics.AddError("Invalid private networks", msg)
+		return
+	}
+	ctx, cancel, ok := operationContext(ctx, data.Timeouts.Create, vmCreateTimeout, &resp.Diagnostics)
+	if !ok {
+		return
+	}
+	defer cancel()
 
 	projectID := data.ProjectID.ValueString()
 	vmid, err := r.client.CreateVM(ctx, projectID, in)
@@ -233,6 +349,16 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 			fmt.Sprintf("waiting for VM %d to run: %s", vmid, err),
 		)
 		return
+	}
+	if data.PowerState.ValueString() == "stopped" {
+		if err := r.client.SetPower(ctx, projectID, vmid, "shutdown"); err != nil {
+			resp.Diagnostics.AddError("Error stopping VM", fmt.Sprintf("stopping VM %d: %s", vmid, err))
+			return
+		}
+		if err := r.client.WaitVMStatus(ctx, projectID, vmid, "stopped"); err != nil {
+			resp.Diagnostics.AddError("Error stopping VM", fmt.Sprintf("waiting for VM %d to stop: %s", vmid, err))
+			return
+		}
 	}
 	cfg, err := r.client.GetVMConfig(ctx, projectID, vmid)
 	if err != nil {
@@ -276,6 +402,41 @@ func (r *vmResource) Read(ctx context.Context, req resource.ReadRequest, resp *r
 	)
 }
 
+func (r *vmResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() {
+		return
+	}
+	var plan vmResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if msg := plan.lanError(ctx); msg != "" {
+		resp.Diagnostics.AddError("Invalid private networks", msg)
+	}
+	if req.State.Raw.IsNull() {
+		planAddresses(&plan, nil)
+		resp.Diagnostics.Append(resp.Plan.Set(ctx, &plan)...)
+		return
+	}
+	var state vmResourceModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	planAddresses(&plan, &state)
+	resp.Diagnostics.Append(resp.Plan.Set(ctx, &plan)...)
+	if msg := wanModeChangeError(state.WANMode, plan.WANMode); msg != "" {
+		resp.Diagnostics.AddError("Cannot switch public network", msg)
+	}
+	if downgradeBlocked(plan, state) {
+		resp.Diagnostics.AddError(
+			"Cannot lower CPU or RAM on a running VM",
+			`Set power_state to "stopped". The API also refuses a downgrade until 24 hours after the VM is created or CPU, RAM, or CPU class is increased.`,
+		)
+	}
+}
+
 func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan, state vmResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -283,6 +444,26 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	if downgradeBlocked(plan, state) {
+		resp.Diagnostics.AddError(
+			"Cannot lower CPU or RAM on a running VM",
+			`Set power_state to "stopped". The API also refuses a downgrade until 24 hours after the VM is created or CPU, RAM, or CPU class is increased.`,
+		)
+		return
+	}
+	if msg := plan.lanError(ctx); msg != "" {
+		resp.Diagnostics.AddError("Invalid private networks", msg)
+		return
+	}
+	if msg := wanModeChangeError(state.WANMode, plan.WANMode); msg != "" {
+		resp.Diagnostics.AddError("Cannot switch public network", msg)
+		return
+	}
+	ctx, cancel, ok := operationContext(ctx, plan.Timeouts.Update, vmUpdateTimeout, &resp.Diagnostics)
+	if !ok {
+		return
+	}
+	defer cancel()
 
 	planInput, diags := plan.upgradeInput(ctx)
 	resp.Diagnostics.Append(diags...)
@@ -293,12 +474,34 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 	}
 
 	projectID, vmid := plan.ProjectID.ValueString(), plan.VMID.ValueInt64()
+	want := plan.PowerState.ValueString()
+	if want == "stopped" && state.PowerState.ValueString() != "stopped" {
+		if err := r.client.SetPower(ctx, projectID, vmid, "shutdown"); err != nil {
+			resp.Diagnostics.AddError("Error stopping VM", fmt.Sprintf("stopping VM %d: %s", vmid, err))
+			return
+		}
+		if err := r.client.WaitVMStatus(ctx, projectID, vmid, "stopped"); err != nil {
+			resp.Diagnostics.AddError("Error stopping VM", fmt.Sprintf("waiting for VM %d to stop: %s", vmid, err))
+			return
+		}
+	}
 	if !reflect.DeepEqual(planInput, stateInput) {
+		planInput.ReleasePublicIP = !plan.RetainPublicIPs.ValueBool()
 		if err := r.client.UpgradeVM(ctx, projectID, vmid, planInput); err != nil {
 			resp.Diagnostics.AddError(
 				"Error updating VM",
 				fmt.Sprintf("updating VM %d: %s", vmid, err),
 			)
+			return
+		}
+	}
+	if want == "running" && state.PowerState.ValueString() != "running" {
+		if err := r.client.SetPower(ctx, projectID, vmid, "start"); err != nil {
+			resp.Diagnostics.AddError("Error starting VM", fmt.Sprintf("starting VM %d: %s", vmid, err))
+			return
+		}
+		if err := r.client.WaitVMStatus(ctx, projectID, vmid, "running"); err != nil {
+			resp.Diagnostics.AddError("Error starting VM", fmt.Sprintf("waiting for VM %d to run: %s", vmid, err))
 			return
 		}
 	}
@@ -322,8 +525,13 @@ func (r *vmResource) Delete(ctx context.Context, req resource.DeleteRequest, res
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	ctx, cancel, ok := operationContext(ctx, data.Timeouts.Delete, vmDeleteTimeout, &resp.Diagnostics)
+	if !ok {
+		return
+	}
+	defer cancel()
 
-	err := r.client.DestroyVM(ctx, data.ProjectID.ValueString(), data.VMID.ValueInt64())
+	err := r.client.DestroyVM(ctx, data.ProjectID.ValueString(), data.VMID.ValueInt64(), !data.RetainPublicIPs.ValueBool())
 	if err != nil && !client.IsNotFound(err) {
 		resp.Diagnostics.AddError(
 			"Error deleting VM",
@@ -343,14 +551,31 @@ func (r *vmResource) ImportState(ctx context.Context, req resource.ImportStateRe
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("vmid"), vmid)...)
 }
 
+func operationContext(ctx context.Context, timeout func(context.Context, time.Duration) (time.Duration, diag.Diagnostics), fallback time.Duration, diags *diag.Diagnostics) (context.Context, context.CancelFunc, bool) {
+	d, more := timeout(ctx, fallback)
+	diags.Append(more...)
+	if diags.HasError() {
+		return ctx, func() {}, false
+	}
+	ctx, cancel := context.WithTimeout(ctx, d)
+	return ctx, cancel, true
+}
+
+func downgradeBlocked(plan, state vmResourceModel) bool {
+	if plan.PowerState.ValueString() != "running" {
+		return false
+	}
+	if plan.Cores.IsUnknown() || state.Cores.IsUnknown() || plan.RAMGB.IsUnknown() || state.RAMGB.IsUnknown() {
+		return false
+	}
+	return plan.Cores.ValueInt64() < state.Cores.ValueInt64() || plan.RAMGB.ValueInt64() < state.RAMGB.ValueInt64()
+}
+
 // upgradeInput is the resizable part of the model in the shape the API expects.
 func (m vmResourceModel) upgradeInput(ctx context.Context) (client.UpgradeVMInput, diag.Diagnostics) {
-	var vnets []string
-	diags := m.LANVNets.ElementsAs(ctx, &vnets, false)
-	sort.Strings(vnets)
-	lan := make([]client.LANInterface, 0, len(vnets))
-	for _, vnet := range vnets {
-		lan = append(lan, client.LANInterface{VNet: vnet, Mode: "auto"})
+	lan, diags := m.lanClients(ctx)
+	if lan == nil {
+		lan = []client.LANInterface{}
 	}
 	return client.UpgradeVMInput{
 		Cores:         m.Cores.ValueInt64(),
@@ -358,8 +583,59 @@ func (m vmResourceModel) upgradeInput(ctx context.Context) (client.UpgradeVMInpu
 		OSDiskGB:      m.OSDiskGB.ValueInt64(),
 		CPUMode:       m.CPUMode.ValueString(),
 		WANMode:       m.WANMode.ValueString(),
+		WANIP:         m.WANIP.ValueString(),
+		WANIPv6:       m.WANIPv6.ValueString(),
 		LANInterfaces: lan,
 	}, diags
+}
+
+func (m vmResourceModel) lanClients(ctx context.Context) ([]client.LANInterface, diag.Diagnostics) {
+	lans, diags := m.lanModels(ctx)
+	if diags.HasError() {
+		return nil, diags
+	}
+	out := make([]client.LANInterface, 0, len(lans))
+	for _, lan := range lans {
+		out = append(out, client.LANInterface{
+			VNet:      lan.VNet.ValueString(),
+			Mode:      lan.Mode.ValueString(),
+			IP:        lan.IP.ValueString(),
+			IsGateway: lan.IsGateway.ValueBool(),
+		})
+	}
+	return out, diags
+}
+
+func (m vmResourceModel) lanModels(ctx context.Context) ([]lanInterfaceModel, diag.Diagnostics) {
+	if m.LANInterfaces.IsNull() || m.LANInterfaces.IsUnknown() {
+		return nil, nil
+	}
+	var lans []lanInterfaceModel
+	diags := m.LANInterfaces.ElementsAs(ctx, &lans, false)
+	return lans, diags
+}
+
+func (m vmResourceModel) lanError(ctx context.Context) string {
+	lans, diags := m.lanModels(ctx)
+	if diags.HasError() {
+		return ""
+	}
+	gateways := 0
+	for _, lan := range lans {
+		if lan.Mode.IsUnknown() || lan.IP.IsUnknown() || lan.IsGateway.IsUnknown() {
+			return ""
+		}
+		if lan.Mode.ValueString() == "select" && lan.IP.ValueString() == "" {
+			return "ip is required when mode is select."
+		}
+		if lan.IsGateway.ValueBool() {
+			gateways++
+		}
+	}
+	if !m.WANMode.IsUnknown() && m.WANMode.ValueString() == "off" && len(lans) > 1 && gateways != 1 {
+		return "When wan_mode is off and more than one private network is attached, set is_gateway on exactly one."
+	}
+	return ""
 }
 
 func (m *vmResourceModel) setAddresses(cfg *client.VMConfig) {
@@ -378,16 +654,118 @@ func (m *vmResourceModel) setFromAPI(ctx context.Context, vm *client.VM, cfg *cl
 		m.OSDiskGB = types.Int64Value(*cfg.OSDiskGB)
 	}
 	m.CPUMode = types.StringValue(vm.CPUMode)
+	if vm.Status == "running" {
+		m.PowerState = types.StringValue("running")
+	} else {
+		m.PowerState = types.StringValue("stopped")
+	}
 	m.WANMode = types.StringValue(wanMode(cfg.WAN))
 	m.setAddresses(cfg)
+	return m.setLAN(ctx, cfg.LANInterfaces)
+}
 
-	vnets := make([]string, 0, len(cfg.LANInterfaces))
-	for _, lan := range cfg.LANInterfaces {
-		vnets = append(vnets, lan.VNet)
+func (m *vmResourceModel) setLAN(ctx context.Context, api []client.VMLAN) diag.Diagnostics {
+	prev, diags := m.lanModels(ctx)
+	if diags.HasError() {
+		return diags
 	}
-	var diags diag.Diagnostics
-	m.LANVNets, diags = types.SetValueFrom(ctx, types.StringType, vnets)
+	byVNet := make(map[string]client.VMLAN, len(api))
+	for _, lan := range api {
+		byVNet[lan.VNet] = lan
+	}
+	onlyOne := len(api) == 1
+	ordered := make([]lanInterfaceModel, 0, len(api))
+	seen := make(map[string]bool, len(api))
+	for _, item := range prev {
+		lan, ok := byVNet[item.VNet.ValueString()]
+		if !ok {
+			continue
+		}
+		ordered = append(ordered, mergeLAN(item, lan, onlyOne))
+		seen[lan.VNet] = true
+	}
+	var extra []string
+	for vnet := range byVNet {
+		if !seen[vnet] {
+			extra = append(extra, vnet)
+		}
+	}
+	sort.Strings(extra)
+	blank := lanInterfaceModel{Mode: types.StringValue("auto"), IsGateway: types.BoolValue(false)}
+	for _, vnet := range extra {
+		ordered = append(ordered, mergeLAN(blank, byVNet[vnet], onlyOne))
+	}
+	if len(ordered) == 0 {
+		m.LANInterfaces = types.ListNull(types.ObjectType{AttrTypes: lanInterfaceAttrTypes})
+		return nil
+	}
+	m.LANInterfaces, diags = types.ListValueFrom(ctx, types.ObjectType{AttrTypes: lanInterfaceAttrTypes}, ordered)
 	return diags
+}
+
+func mergeLAN(prev lanInterfaceModel, api client.VMLAN, onlyOne bool) lanInterfaceModel {
+	mode := prev.Mode.ValueString()
+	if mode == "" {
+		mode = "auto"
+	}
+	ip := types.StringNull()
+	if mode == "select" {
+		if api.IP != nil {
+			ip = types.StringValue(*api.IP)
+		} else if !prev.IP.IsNull() && !prev.IP.IsUnknown() {
+			ip = prev.IP
+		}
+	}
+	gateway := types.BoolValue(api.IsGateway)
+	if onlyOne && !prev.IsGateway.IsNull() && !prev.IsGateway.IsUnknown() {
+		gateway = prev.IsGateway
+	}
+	return lanInterfaceModel{
+		VNet:      types.StringValue(api.VNet),
+		Mode:      types.StringValue(mode),
+		IP:        ip,
+		IsGateway: gateway,
+	}
+}
+
+func wanModeChangeError(from, to types.String) string {
+	if from.IsNull() || from.IsUnknown() || to.IsNull() || to.IsUnknown() || from.Equal(to) {
+		return ""
+	}
+	attached := from.ValueString() != "off" && to.ValueString() != "off"
+	if attached {
+		return `Set wan_mode to "off" before changing between ipv4, ipv6 and dual.`
+	}
+	return ""
+}
+
+// planAddresses keeps ipv4 and ipv6 in the plan while wan_mode stays the same.
+// A mode that does not include an address makes that address null.
+func planAddresses(plan, state *vmResourceModel) {
+	if plan.WANMode.IsUnknown() || plan.WANMode.IsNull() {
+		return
+	}
+	same := state != nil && !state.WANMode.IsUnknown() && state.WANMode.Equal(plan.WANMode)
+	switch plan.WANMode.ValueString() {
+	case "off":
+		plan.IPv4 = types.StringNull()
+		plan.IPv6 = types.StringNull()
+	case "ipv4":
+		plan.IPv6 = types.StringNull()
+		if same {
+			plan.IPv4 = state.IPv4
+		}
+	case "ipv6":
+		plan.IPv4 = types.StringNull()
+		if same {
+			plan.IPv6 = state.IPv6
+		}
+	case "dual":
+		if same {
+			plan.IPv4 = state.IPv4
+			plan.IPv6 = state.IPv6
+		}
+	}
 }
 
 func wanMode(wan *client.VMWAN) string {

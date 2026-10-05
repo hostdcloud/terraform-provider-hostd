@@ -3,12 +3,12 @@
 page_title: "hostd_project Resource - hostd"
 subcategory: ""
 description: |-
-  A Public Cloud project. The API key must be allowed to create projects; it gets Full access to the projects it creates. A project can be deleted only after all its virtual machines and private networks are removed.
+  A Public Cloud project. The API key must be allowed to create projects; it gets Full access to the projects it creates. If creation is interrupted, a project with the same name in the same cluster is kept instead of creating another. A project can be deleted only after all its virtual machines and private networks are removed.
 ---
 
 # hostd_project (Resource)
 
-A Public Cloud project. The API key must be allowed to create projects; it gets Full access to the projects it creates. A project can be deleted only after all its virtual machines and private networks are removed.
+A Public Cloud project. The API key must be allowed to create projects; it gets Full access to the projects it creates. If creation is interrupted, a project with the same name in the same cluster is kept instead of creating another. A project can be deleted only after all its virtual machines and private networks are removed.
 
 ## Example Usage
 
@@ -31,10 +31,20 @@ resource "hostd_project" "main" {
 ### Optional
 
 - `description` (String) Project description (up to 1000 characters). Empty by default.
+- `timeouts` (Attributes) (see [below for nested schema](#nestedatt--timeouts))
 
 ### Read-Only
 
 - `id` (String) Project UUID.
+
+<a id="nestedatt--timeouts"></a>
+### Nested Schema for `timeouts`
+
+Optional:
+
+- `create` (String) How long to wait for the project to be created. Defaults to 5 minutes.
+- `delete` (String) How long to wait for the project to be deleted. Defaults to 5 minutes.
+- `update` (String) How long to wait for the project to be updated. Defaults to 5 minutes.
 
 ## Import
 
