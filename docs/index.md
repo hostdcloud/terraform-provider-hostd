@@ -50,7 +50,7 @@ The key acts with the access it was given when it was created:
 
 Read access is enough to refresh state. A shared project where your role is auditor can only be Read: the key cannot do more than your role, and a write fails with a permissions error.
 
-Use a separate key for each Terraform workspace, and set it only with `HOSTD_API_KEY` (a CI secret), not in the configuration. Prefer a key that expires in 30 or 90 days: create the next key, update the secret, then delete the old one. In Settings → API Keys, **Terraform** fills a new key for apply and destroy (90 days, create projects, SSH keys Write, Full on projects you can write).
+Use a separate key for each Terraform workspace, and set it only with `HOSTD_API_KEY` (a CI secret), not in the configuration. Prefer a key that expires in 30 or 90 days: create the next key, update the secret, then delete the old one.
 
 | Terraform command | Minimum access |
 |---|---|
