@@ -247,22 +247,11 @@ func TestCheckAccess(t *testing.T) {
 	})
 }
 
-func TestCreateProject_adoptsExistingAfterInterrupt(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			hj, ok := w.(http.Hijacker)
-			if !ok {
-				t.Fatal("cannot hijack")
-			}
-			conn, _, err := hj.Hijack()
-			if err != nil {
-				t.Fatal(err)
-			}
-			conn.Close()
-			return
-		}
-		_, _ = w.Write([]byte(`[{"uuid":"p1","name":"prod","description":"","cluster":"waw-1"},{"uuid":"p2","name":"prod","description":"","cluster":"waw-2"}]`))
-	}))
+func TestCreateProject_adoptsAfterInterrupt(t *testing.T) {
+	srv := interruptedCreate(t,
+		`[{"uuid":"p0","name":"prod","description":"","cluster":"waw-1"}]`,
+		`[{"uuid":"p0","name":"prod","description":"","cluster":"waw-1"},{"uuid":"p1","name":"prod","description":"","cluster":"waw-1"},{"uuid":"p2","name":"prod","description":"","cluster":"waw-2"}]`,
+	)
 	defer srv.Close()
 
 	project, err := New(srv.URL, "test", "test").CreateProject(context.Background(), "waw-1", "prod", "")

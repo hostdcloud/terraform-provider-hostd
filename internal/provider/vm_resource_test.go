@@ -13,6 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/knownvalue"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/statecheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/hashicorp/terraform-plugin-testing/tfjsonpath"
@@ -43,6 +44,35 @@ func TestAccVM_basic(t *testing.T) {
 				Config: testAccVMConfig(rName, 4),
 				ConfigStateChecks: []statecheck.StateCheck{
 					statecheck.ExpectKnownValue(resourceName, tfjsonpath.New("ram_gb"), knownvalue.Int64Exact(4)),
+				},
+			},
+			{
+				// Renaming the key replaces it; the VM only records the new key ID.
+				Config: testAccVMConfigWithKey(rName, rName+"-rotated", 4),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction("hostd_ssh_key.test", plancheck.ResourceActionReplace),
+						plancheck.ExpectResourceAction(resourceName, plancheck.ResourceActionUpdate),
+					},
+				},
+			},
+			{
+				// Pause the VM outside Terraform; the next apply resumes it.
+				Config: testAccVMConfigWithKey(rName, rName+"-rotated", 4),
+				Check: func(s *terraform.State) error {
+					rs := s.RootModule().Resources[resourceName]
+					vmid, err := strconv.ParseInt(rs.Primary.Attributes["vmid"], 10, 64)
+					if err != nil {
+						return err
+					}
+					return testAccClient().SetPower(context.Background(), rs.Primary.Attributes["project_id"], vmid, "suspend")
+				},
+				ExpectNonEmptyPlan: true,
+			},
+			{
+				Config: testAccVMConfigWithKey(rName, rName+"-rotated", 4),
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue(resourceName, tfjsonpath.New("power_state"), knownvalue.StringExact("running")),
 				},
 			},
 			{
@@ -104,6 +134,10 @@ func testAccVMImportID(resourceName string) resource.ImportStateIdFunc {
 }
 
 func testAccVMConfig(rName string, ramGB int) string {
+	return testAccVMConfigWithKey(rName, rName, ramGB)
+}
+
+func testAccVMConfigWithKey(rName, keyName string, ramGB int) string {
 	return fmt.Sprintf(`
 resource "hostd_project" "test" {
   name         = %[1]q
@@ -111,7 +145,7 @@ resource "hostd_project" "test" {
 }
 
 resource "hostd_ssh_key" "test" {
-  name           = %[1]q
+  name           = %[6]q
   public_ssh_key = %[4]q
 }
 
@@ -124,5 +158,5 @@ resource "hostd_vm" "test" {
   ram_gb      = %[5]d
   os_disk_gb  = 20
 }
-`, rName, os.Getenv("HOSTD_TEST_CLUSTER"), os.Getenv("HOSTD_TEST_OS_IMAGE"), testAccSSHPublicKey, ramGB)
+`, rName, os.Getenv("HOSTD_TEST_CLUSTER"), os.Getenv("HOSTD_TEST_OS_IMAGE"), testAccSSHPublicKey, ramGB, keyName)
 }

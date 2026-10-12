@@ -16,18 +16,18 @@ type VMFirewallOptions struct {
 	PolicyOut *string `json:"policy_out"`
 }
 
-type VMFirewallRuleInput struct {
-	Position *int64 `json:"position,omitempty"`
-	Pos      *int64 `json:"pos,omitempty"`
-	Type     string `json:"type"`
-	Action   string `json:"action"`
-	Proto    string `json:"proto,omitempty"`
-	Source   string `json:"source"`
-	Dest     string `json:"dest"`
-	SPort    string `json:"sport"`
-	DPort    string `json:"dport"`
-	Comment  string `json:"comment"`
-	Enable   bool   `json:"enable"`
+// FirewallRuleInput is one rule of a full rule list. Proto is empty for a
+// security group attached to a VM.
+type FirewallRuleInput struct {
+	Type    string `json:"type"`
+	Action  string `json:"action"`
+	Proto   string `json:"proto,omitempty"`
+	Source  string `json:"source"`
+	Dest    string `json:"dest"`
+	SPort   string `json:"sport"`
+	DPort   string `json:"dport"`
+	Comment string `json:"comment"`
+	Enable  bool   `json:"enable"`
 }
 
 func vmFirewallPath(projectUUID string, vmid int64) string {
@@ -47,8 +47,8 @@ func (c *Client) SetVMFirewallOptions(ctx context.Context, projectUUID string, v
 	return c.do(ctx, http.MethodPut, vmFirewallPath(projectUUID, vmid)+"config/", in, nil)
 }
 
-// VMFirewallRule is a packet filter or an attached security group. Group rows leave proto empty.
-type VMFirewallRule struct {
+// FirewallRule is a packet filter or, on a VM, an attached security group.
+type FirewallRule struct {
 	Pos     int64   `json:"pos"`
 	Type    string  `json:"type"`
 	Action  *string `json:"action"`
@@ -61,47 +61,27 @@ type VMFirewallRule struct {
 	Enable  *bool   `json:"enable"`
 }
 
-func (c *Client) ListVMFirewallRules(ctx context.Context, projectUUID string, vmid int64) ([]VMFirewallRule, error) {
+// listRules reads a rule list; null means the API could not read it.
+func (c *Client) listRules(ctx context.Context, path string) ([]FirewallRule, error) {
 	var raw json.RawMessage
-	if err := c.do(ctx, http.MethodGet, vmFirewallPath(projectUUID, vmid)+"rules/", nil, &raw); err != nil {
+	if err := c.do(ctx, http.MethodGet, path, nil, &raw); err != nil {
 		return nil, err
 	}
 	if string(raw) == "null" {
-		return nil, fmt.Errorf("VM firewall rules are unavailable")
+		return nil, fmt.Errorf("firewall rules are unavailable, retry later")
 	}
-	var rules []VMFirewallRule
+	var rules []FirewallRule
 	if err := json.Unmarshal(raw, &rules); err != nil {
 		return nil, err
 	}
 	return rules, nil
 }
 
-func (c *Client) GetVMFirewallRule(ctx context.Context, projectUUID string, vmid, pos int64) (*VMFirewallRule, error) {
-	rules, err := c.ListVMFirewallRules(ctx, projectUUID, vmid)
-	if err != nil {
-		return nil, err
-	}
-	for i := range rules {
-		if rules[i].Pos == pos {
-			return &rules[i], nil
-		}
-	}
-	return nil, &Error{Status: http.StatusNotFound, Body: fmt.Sprintf("VM firewall rule at position %d not found", pos)}
+func (c *Client) ListVMFirewallRules(ctx context.Context, projectUUID string, vmid int64) ([]FirewallRule, error) {
+	return c.listRules(ctx, vmFirewallPath(projectUUID, vmid)+"rules/")
 }
 
-func (c *Client) CreateVMFirewallRule(ctx context.Context, projectUUID string, vmid int64, rule VMFirewallRuleInput) error {
-	return c.do(ctx, http.MethodPost, vmFirewallPath(projectUUID, vmid)+"rules/", rule, nil)
-}
-
-func (c *Client) UpdateVMFirewallRule(ctx context.Context, projectUUID string, vmid int64, rule VMFirewallRuleInput) error {
-	return c.do(ctx, http.MethodPut, vmFirewallPath(projectUUID, vmid)+"rules/", rule, nil)
-}
-
-func (c *Client) DeleteVMFirewallRule(ctx context.Context, projectUUID string, vmid, pos int64) error {
-	return c.do(ctx, http.MethodDelete, vmFirewallPath(projectUUID, vmid)+"rules/", map[string]int64{"pos": pos}, nil)
-}
-
-func (c *Client) MoveVMFirewallRule(ctx context.Context, projectUUID string, vmid, from, to int64) error {
-	in := map[string]int64{"from_pos": from, "to_pos": to}
-	return c.do(ctx, http.MethodPost, vmFirewallPath(projectUUID, vmid)+"rules/move/", in, nil)
+// ReplaceVMFirewallRules sets the full ordered rule list of the VM.
+func (c *Client) ReplaceVMFirewallRules(ctx context.Context, projectUUID string, vmid int64, rules []FirewallRuleInput) error {
+	return c.do(ctx, http.MethodPut, vmFirewallPath(projectUUID, vmid)+"rules/replace/", map[string]any{"rules": rules}, nil)
 }

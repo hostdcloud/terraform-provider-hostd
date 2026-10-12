@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 )
 
@@ -97,49 +98,52 @@ func vmPath(projectUUID string, vmid int64) string {
 }
 
 // CreateVM creates and starts a VM; the API returns once creation has finished.
-// If the call is interrupted, a VM with the same hostname in the project is
-// adopted so a retry does not create a second one.
+// If the call is interrupted, a VM with the hostname that was not in the
+// project before the call is adopted, so a retry does not create a second one.
 func (c *Client) CreateVM(ctx context.Context, projectUUID string, in CreateVMInput) (int64, error) {
+	before, err := c.vmIDsByHostname(ctx, projectUUID, in.Hostname)
+	if err != nil {
+		return 0, err
+	}
 	var out struct {
 		VMID int64 `json:"vmid"`
 	}
-	err := c.do(ctx, http.MethodPost, "/cloud/project/"+projectUUID+"/vm/", in, &out)
+	err = c.do(ctx, http.MethodPost, "/cloud/project/"+projectUUID+"/vm/", in, &out)
 	if err == nil {
 		return out.VMID, nil
 	}
 	if !isInterrupted(err) {
 		return 0, err
 	}
-	vmid, found, findErr := c.vmByHostname(context.WithoutCancel(ctx), projectUUID, in.Hostname)
+	after, findErr := c.vmIDsByHostname(context.WithoutCancel(ctx), projectUUID, in.Hostname)
 	if findErr != nil {
-		return 0, findErr
+		return 0, fmt.Errorf("%w; looking for the VM afterwards: %v", err, findErr)
 	}
-	if found {
-		return vmid, nil
+	created := slices.DeleteFunc(after, func(vmid int64) bool { return slices.Contains(before, vmid) })
+	switch len(created) {
+	case 0:
+		return 0, err
+	case 1:
+		return created[0], nil
 	}
-	return 0, err
+	return 0, fmt.Errorf("%w; %d new VMs are named %q, import the one you want as <project_id>/<vmid>", err, len(created), in.Hostname)
 }
 
-func (c *Client) vmByHostname(ctx context.Context, projectUUID, hostname string) (int64, bool, error) {
+func (c *Client) vmIDsByHostname(ctx context.Context, projectUUID, hostname string) ([]int64, error) {
 	var vms []struct {
 		VMID int64  `json:"vmid"`
 		Name string `json:"name"`
 	}
 	if err := c.do(ctx, http.MethodGet, "/cloud/project/"+projectUUID+"/vm/", nil, &vms); err != nil {
-		return 0, false, nil
+		return nil, err
 	}
-	var vmid int64
-	matches := 0
+	var ids []int64
 	for _, vm := range vms {
 		if vm.Name == hostname {
-			matches++
-			vmid = vm.VMID
+			ids = append(ids, vm.VMID)
 		}
 	}
-	if matches > 1 {
-		return 0, false, fmt.Errorf("%d VMs in the project are named %q; import the one you want as <project_id>/<vmid>", matches, hostname)
-	}
-	return vmid, matches == 1, nil
+	return ids, nil
 }
 
 func (c *Client) GetVM(ctx context.Context, projectUUID string, vmid int64) (*VM, error) {

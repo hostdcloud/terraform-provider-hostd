@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/knownvalue"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/statecheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/hashicorp/terraform-plugin-testing/tfjsonpath"
@@ -27,7 +28,7 @@ func TestAccIPSet_basic(t *testing.T) {
 		CheckDestroy:             testAccCheckProjectDestroy,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccIPSetConfig(rName, "203.0.113.10", ""),
+				Config: testAccIPSetConfig(rName, rName, "", "203.0.113.10", ""),
 				ConfigStateChecks: []statecheck.StateCheck{
 					statecheck.ExpectKnownValue(setName, tfjsonpath.New("id"), knownvalue.NotNull()),
 					statecheck.ExpectKnownValue(setName, tfjsonpath.New("name"), knownvalue.StringExact(rName)),
@@ -37,9 +38,27 @@ func TestAccIPSet_basic(t *testing.T) {
 				},
 			},
 			{
-				Config: testAccIPSetConfig(rName, "203.0.113.10", "office"),
+				Config: testAccIPSetConfig(rName, rName, "offices", "203.0.113.10", "office"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(setName, plancheck.ResourceActionUpdate),
+					},
+				},
 				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue(setName, tfjsonpath.New("comment"), knownvalue.StringExact("offices")),
 					statecheck.ExpectKnownValue(memberName, tfjsonpath.New("comment"), knownvalue.StringExact("office")),
+				},
+			},
+			{
+				// An IP set cannot be renamed: a new name replaces it.
+				Config: testAccIPSetConfig(rName, rName+"b", "offices", "203.0.113.10", "office"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(setName, plancheck.ResourceActionReplace),
+					},
+				},
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue(setName, tfjsonpath.New("name"), knownvalue.StringExact(rName+"b")),
 				},
 			},
 			{
@@ -49,10 +68,11 @@ func TestAccIPSet_basic(t *testing.T) {
 				ImportStateVerify: true,
 			},
 			{
-				ResourceName:      memberName,
-				ImportState:       true,
-				ImportStateIdFunc: testAccIPSetMemberImportID(memberName),
-				ImportStateVerify: true,
+				ResourceName:                         memberName,
+				ImportState:                          true,
+				ImportStateIdFunc:                    testAccIPSetMemberImportID(memberName),
+				ImportStateVerify:                    true,
+				ImportStateVerifyIdentifierAttribute: "cidr",
 			},
 		},
 	})
@@ -78,7 +98,7 @@ func testAccIPSetMemberImportID(resourceName string) resource.ImportStateIdFunc 
 	}
 }
 
-func testAccIPSetConfig(name, cidr, comment string) string {
+func testAccIPSetConfig(projectName, name, comment, cidr, memberComment string) string {
 	return fmt.Sprintf(`
 resource "hostd_project" "test" {
   name         = %[1]q
@@ -87,14 +107,15 @@ resource "hostd_project" "test" {
 
 resource "hostd_ip_set" "test" {
   project_id = hostd_project.test.id
-  name       = %[1]q
+  name       = %[3]q
+  comment    = %[4]q
 }
 
 resource "hostd_ip_set_member" "test" {
   project_id = hostd_ip_set.test.project_id
   ip_set_id  = hostd_ip_set.test.id
-  cidr       = %[3]q
-  comment    = %[4]q
+  cidr       = %[5]q
+  comment    = %[6]q
 }
-`, name, os.Getenv("HOSTD_TEST_CLUSTER"), cidr, comment)
+`, projectName, os.Getenv("HOSTD_TEST_CLUSTER"), name, comment, cidr, memberComment)
 }

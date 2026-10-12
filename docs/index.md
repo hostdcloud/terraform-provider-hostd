@@ -42,8 +42,8 @@ The key acts with the access it was given when it was created:
 | `hostd_project` | Allowed to create projects; the key gets full access to the projects it creates. Deleting a project needs full access to it. |
 | `hostd_vm` | Write access to the project; deleting a VM needs full access to it. |
 | `hostd_ip_set`, `hostd_ip_set_member` | Write access to the project. Deleting a set removes firewall rules that reference it. |
-| `hostd_security_group`, `hostd_security_group_rule` | Write access to the project. Deleting a group detaches it from every VM. Rules are ordered by `position`. |
-| `hostd_vm_firewall_options`, `hostd_vm_firewall_rule` | Write access to the project. The firewall filters the VM's public interface. `type = group` attaches a security group. |
+| `hostd_security_group` | Write access to the project. Deleting a group detaches it from every VM. |
+| `hostd_vm_firewall` | Write access to the project. The firewall filters the VM's public interface. A `type = "group"` rule attaches a security group. |
 | `hostd_os_images` | Read access to the project |
 | `hostd_public_ips`, `hostd_public_ip_ptr` | Read to list addresses. Changing a PTR needs Write. |
 | `hostd_private_networks`, `hostd_ip_addresses` | Read. Private networks include free addresses for `lan_interfaces`. |
@@ -60,7 +60,11 @@ Use a separate key for each Terraform workspace, and set it only with `HOSTD_API
 
 ## Replacing and destroying a VM
 
-Changing `project_id`, `hostname`, `os_image`, `ssh_key_ids`, `username`, `wan_ip`, or `wan_ipv6` replaces the VM. Destroying a VM deletes its disks and every backup of that VM. Public addresses return to the pool unless `retain_public_ips` is true (a reserved IPv4 stays billed). For a production VM set `lifecycle { prevent_destroy = true }`.
+Changing `project_id`, `hostname`, `os_image`, `username`, `wan_ip`, or `wan_ipv6` replaces the VM. SSH keys are installed only when the VM is created, so changing `ssh_key_ids` or rotating a `hostd_ssh_key` does not touch the VM. Destroying a VM deletes its disks and every backup of that VM. Public addresses return to the pool unless `retain_public_ips` is true (a reserved IPv4 stays billed). For a production VM set `lifecycle { prevent_destroy = true }`.
+
+## Firewall rules
+
+`hostd_security_group` and `hostd_vm_firewall` each hold the complete ordered `rules` list. Terraform writes the whole list in one request, so rules can be added, removed and reordered in any apply. Rules created outside Terraform (for example in the portal) on a managed group or VM are removed on the next apply.
 
 ## Rate limits
 

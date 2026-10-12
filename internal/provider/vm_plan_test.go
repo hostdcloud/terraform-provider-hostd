@@ -116,3 +116,43 @@ func TestPlanAddressesKeepsThemWhenWANStays(t *testing.T) {
 		t.Fatalf("create ipv4: %s %s", created.IPv4, created.IPv6)
 	}
 }
+
+func TestVMSizeError(t *testing.T) {
+	cases := []struct {
+		cores, ram, disk int64
+		attribute        string
+	}{
+		{2, 4, 20, ""},
+		{4, 16, 400, ""},
+		{3, 4, 40, "cores"},
+		{0, 4, 40, "cores"},
+		{2, 1, 20, "ram_gb"},
+		{2, 9, 20, "ram_gb"},
+		{2, 4, 30, "os_disk_gb"},
+		{4, 8, 20, "os_disk_gb"},
+		{2, 4, 220, "os_disk_gb"},
+	}
+	for _, c := range cases {
+		attribute, _ := vmSizeError(types.Int64Value(c.cores), types.Int64Value(c.ram), types.Int64Value(c.disk))
+		if attribute != c.attribute {
+			t.Errorf("%d vCPU, %d GiB RAM, %d GiB disk: got %q, want %q", c.cores, c.ram, c.disk, attribute, c.attribute)
+		}
+	}
+	if attribute, _ := vmSizeError(types.Int64Unknown(), types.Int64Value(1), types.Int64Value(1)); attribute != "" {
+		t.Errorf("unknown cores must skip the check, got %q", attribute)
+	}
+}
+
+func TestLANErrorWANOffNeedsANetwork(t *testing.T) {
+	m := vmResourceModel{
+		WANMode:       types.StringValue("off"),
+		LANInterfaces: types.ListNull(types.ObjectType{AttrTypes: lanInterfaceAttrTypes}),
+	}
+	if m.lanError(context.Background()) == "" {
+		t.Fatal("wan_mode off without private networks must be refused")
+	}
+	m.LANInterfaces = types.ListUnknown(types.ObjectType{AttrTypes: lanInterfaceAttrTypes})
+	if msg := m.lanError(context.Background()); msg != "" {
+		t.Fatalf("unknown private networks must skip the check, got %q", msg)
+	}
+}

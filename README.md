@@ -1,6 +1,6 @@
 # terraform-provider-hostd
 
-Terraform provider for [hostd.cloud](https://hostd.cloud) Public Cloud: projects, SSH keys and virtual machines.
+Terraform provider for [hostd.cloud](https://hostd.cloud) Public Cloud: projects, SSH keys, virtual machines, firewall and public IP PTR.
 
 ```hcl
 terraform {
@@ -19,7 +19,7 @@ resource "hostd_project" "main" {
 }
 ```
 
-Resources: `hostd_project`, `hostd_ssh_key`, `hostd_vm`. Data sources: `hostd_os_images`.
+Resources: `hostd_project`, `hostd_ssh_key`, `hostd_vm`, `hostd_vm_firewall`, `hostd_security_group`, `hostd_ip_set`, `hostd_ip_set_member`, `hostd_public_ip_ptr`. Data sources: `hostd_os_images`, `hostd_public_ips`, `hostd_private_networks`, `hostd_ip_addresses`.
 See [`docs/`](docs/) for the full reference and the API key access each resource needs.
 
 ## Development

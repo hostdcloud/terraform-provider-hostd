@@ -142,9 +142,7 @@ func (p *hostdProvider) Resources(_ context.Context) []func() resource.Resource 
 		NewIPSetResource,
 		NewIPSetMemberResource,
 		NewSecurityGroupResource,
-		NewSecurityGroupRuleResource,
-		NewVMFirewallOptionsResource,
-		NewVMFirewallRuleResource,
+		NewVMFirewallResource,
 		NewPublicIPPTRResource,
 	}
 }

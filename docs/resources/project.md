@@ -3,12 +3,12 @@
 page_title: "hostd_project Resource - hostd"
 subcategory: ""
 description: |-
-  A Public Cloud project. The API key must be allowed to create projects; it gets Full access to the projects it creates. If creation is interrupted, a project with the same name in the same cluster is kept instead of creating another. A project can be deleted only after all its virtual machines and private networks are removed.
+  A Public Cloud project. The API key must be allowed to create projects; it gets Full access to the projects it creates. If creation is interrupted, a project with the same name in the same cluster that appeared during the call is kept instead of creating another. A project can be deleted only after all its virtual machines and private networks are removed.
 ---
 
 # hostd_project (Resource)
 
-A Public Cloud project. The API key must be allowed to create projects; it gets Full access to the projects it creates. If creation is interrupted, a project with the same name in the same cluster is kept instead of creating another. A project can be deleted only after all its virtual machines and private networks are removed.
+A Public Cloud project. The API key must be allowed to create projects; it gets Full access to the projects it creates. If creation is interrupted, a project with the same name in the same cluster that appeared during the call is kept instead of creating another. A project can be deleted only after all its virtual machines and private networks are removed.
 
 ## Example Usage
 

@@ -3,12 +3,12 @@
 page_title: "hostd_security_group Resource - hostd"
 subcategory: ""
 description: |-
-  A project firewall security group. Rules are hostd_security_group_rule. Deleting the group removes its rules and detaches it from every VM in the project. Renaming it changes pve_group_name. Import with <project_id>,<id>.
+  A project firewall security group and its ordered rules. Attach it to a VM with a type = "group" rule in hostd_vm_firewall. rules is the complete list: rules added outside Terraform are removed on the next apply. Deleting the group removes its rules and detaches it from every VM in the project. Renaming it changes pve_group_name; VM attachments follow. Import with <project_id>,<id>.
 ---
 
 # hostd_security_group (Resource)
 
-A project firewall security group. Rules are `hostd_security_group_rule`. Deleting the group removes its rules and detaches it from every VM in the project. Renaming it changes `pve_group_name`. Import with `<project_id>,<id>`.
+A project firewall security group and its ordered rules. Attach it to a VM with a `type = "group"` rule in `hostd_vm_firewall`. `rules` is the complete list: rules added outside Terraform are removed on the next apply. Deleting the group removes its rules and detaches it from every VM in the project. Renaming it changes `pve_group_name`; VM attachments follow. Import with `<project_id>,<id>`.
 
 ## Example Usage
 
@@ -17,6 +17,11 @@ resource "hostd_security_group" "web" {
   project_id = hostd_project.main.id
   name       = "web"
   comment    = "Public web servers"
+
+  rules = [
+    { type = "in", action = "ACCEPT", proto = "tcp", dport = "80,443" },
+    { type = "in", action = "ACCEPT", proto = "tcp", dport = "22", source = "+${hostd_ip_set.office.pve_ipset_name}" },
+  ]
 }
 ```
 
@@ -25,14 +30,43 @@ resource "hostd_security_group" "web" {
 
 ### Required
 
-- `name` (String) Name: a lowercase letter, then up to 14 letters, digits, hyphens or underscores. The API stores it in lower case.
+- `name` (String) Name: a lowercase letter, then up to 14 letters, digits, hyphens or underscores.
 - `project_id` (String) UUID of the project (`hostd_project`) the group belongs to.
 
 ### Optional
 
 - `comment` (String) Free-text comment. Empty by default.
+- `rules` (Attributes List) Rules in evaluation order. Empty by default. (see [below for nested schema](#nestedatt--rules))
 
 ### Read-Only
 
 - `id` (String) Security group UUID.
-- `pve_group_name` (String) Identifier a VM firewall rule uses as `action` when its type is `group`.
+- `pve_group_name` (String) Identifier a `hostd_vm_firewall` rule uses as `action` when its type is `group`. Changes when the group is renamed.
+
+<a id="nestedatt--rules"></a>
+### Nested Schema for `rules`
+
+Required:
+
+- `action` (String) `ACCEPT` or `DROP`.
+- `type` (String) `in` or `out`.
+
+Optional:
+
+- `comment` (String) Free-text comment, up to 255 characters.
+- `dest` (String) Destination address, CIDR (IPv4 no larger than `/26`, IPv6 no larger than `/64`), IPv4 range, or an IP set as `+<pve_ipset_name>`. Empty matches any.
+- `dport` (String) Destination port, range (`80:85`) or comma-separated list. TCP and UDP only.
+- `enable` (Boolean) Whether the rule is enabled. Defaults to true.
+- `proto` (String) `tcp`, `udp` or `icmp`.
+- `source` (String) Source address, CIDR (IPv4 no larger than `/26`, IPv6 no larger than `/64`), IPv4 range, or an IP set as `+<pve_ipset_name>`. Empty matches any.
+- `sport` (String) Source port, range (`80:85`) or comma-separated list. TCP and UDP only.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+terraform import hostd_security_group.web 0b6e5f7c-4f4e-4a43-9c0e-6f4d3b2a1c90,5d1f3c2e-8a7b-4c6d-9e0f-1a2b3c4d5e6f
+```

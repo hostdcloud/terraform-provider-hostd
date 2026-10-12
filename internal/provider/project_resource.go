@@ -64,7 +64,7 @@ func (r *projectResource) Configure(_ context.Context, req resource.ConfigureReq
 
 func (r *projectResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "A Public Cloud project. The API key must be allowed to create projects; it gets Full access to the projects it creates. If creation is interrupted, a project with the same name in the same cluster is kept instead of creating another. A project can be deleted only after all its virtual machines and private networks are removed.",
+		MarkdownDescription: "A Public Cloud project. The API key must be allowed to create projects; it gets Full access to the projects it creates. If creation is interrupted, a project with the same name in the same cluster that appeared during the call is kept instead of creating another. A project can be deleted only after all its virtual machines and private networks are removed.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,

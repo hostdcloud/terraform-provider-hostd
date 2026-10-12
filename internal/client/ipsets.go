@@ -56,9 +56,10 @@ func (c *Client) CreateIPSet(ctx context.Context, projectUUID, name, comment str
 	return &set, nil
 }
 
-func (c *Client) UpdateIPSet(ctx context.Context, projectUUID, uuid, name, comment string) (*IPSet, error) {
+// UpdateIPSet changes the comment; the API does not rename IP sets.
+func (c *Client) UpdateIPSet(ctx context.Context, projectUUID, uuid, comment string) (*IPSet, error) {
 	var set IPSet
-	in := map[string]string{"display_name": name, "comment": comment}
+	in := map[string]string{"comment": comment}
 	if err := c.do(ctx, http.MethodPatch, ipSetPath(projectUUID, uuid), in, &set); err != nil {
 		return nil, err
 	}

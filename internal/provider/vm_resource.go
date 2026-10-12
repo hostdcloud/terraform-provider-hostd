@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,7 +25,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -53,11 +53,14 @@ const (
 )
 
 var (
-	_ resource.Resource                = &vmResource{}
-	_ resource.ResourceWithConfigure   = &vmResource{}
-	_ resource.ResourceWithImportState = &vmResource{}
-	_ resource.ResourceWithModifyPlan  = &vmResource{}
+	_ resource.Resource                   = &vmResource{}
+	_ resource.ResourceWithConfigure      = &vmResource{}
+	_ resource.ResourceWithImportState    = &vmResource{}
+	_ resource.ResourceWithModifyPlan     = &vmResource{}
+	_ resource.ResourceWithValidateConfig = &vmResource{}
 )
+
+var hostnamePattern = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*$`)
 
 func NewVMResource() resource.Resource {
 	return &vmResource{}
@@ -110,11 +113,12 @@ func (r *vmResource) Configure(_ context.Context, req resource.ConfigureRequest,
 
 func (r *vmResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "A Public Cloud virtual machine. Creation waits until the VM is running. If that call is interrupted, a VM with the same hostname in the project is kept instead of creating another. " +
+		MarkdownDescription: "A Public Cloud virtual machine. Creation waits until the VM is running. If that call is interrupted, a VM with the same hostname that appeared during the call is kept instead of creating another; an existing VM with that hostname is never adopted. " +
 			"Destroying stops the VM, deletes its disks, and deletes all of its backups. Public addresses return to the pool unless `retain_public_ips` is true (a reserved IPv4 stays billed). " +
-			"Changing `project_id`, `hostname`, `os_image`, `ssh_key_ids`, `username`, `wan_ip`, or `wan_ipv6` replaces the VM. For a production VM set `lifecycle { prevent_destroy = true }`. " +
+			"Changing `project_id`, `hostname`, `os_image`, `username`, `wan_ip`, or `wan_ipv6` replaces the VM. For a production VM set `lifecycle { prevent_destroy = true }`. " +
 			"CPU, RAM, disk, CPU class and networking can be changed in place. Lowering CPU or RAM requires `power_state` `stopped` and is refused until 24 hours after create or the last increase. " +
-			"Import with `<project_id>/<vmid>`; `os_image`, `ssh_key_ids` and `username` are create-time inputs the API does not return. After an import, set `os_image` and `ssh_key_ids` in the configuration (they are recorded without replacing the VM) and omit `username`.",
+			"Import with `<project_id>/<vmid>`; `os_image`, `ssh_key_ids` and `username` are create-time inputs the API does not return. After an import, set `os_image` and `ssh_key_ids` in the configuration (they are recorded without replacing the VM) and omit `username`. " +
+			"A VM that was paused outside Terraform is resumed or stopped to match `power_state`.",
 		Attributes: map[string]schema.Attribute{
 			"project_id": schema.StringAttribute{
 				Required:            true,
@@ -133,6 +137,10 @@ func (r *vmResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp 
 			"hostname": schema.StringAttribute{
 				Required:            true,
 				MarkdownDescription: "DNS-style hostname (letters, digits, hyphens and dots; at most 64 characters).",
+				Validators: []validator.String{
+					stringvalidator.LengthAtMost(64),
+					stringvalidator.RegexMatches(hostnamePattern, "must be a DNS hostname: letters, digits, hyphens and dots, no underscores"),
+				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -159,21 +167,12 @@ func (r *vmResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp 
 				},
 			},
 			"ssh_key_ids": schema.SetAttribute{
-				ElementType:         types.Int64Type,
-				Required:            true,
-				MarkdownDescription: "IDs of SSH keys (`hostd_ssh_key`) to install, from one to five. The VM is reached with these keys: the provider sets a random cloud-init password and does not expose it.",
+				ElementType: types.Int64Type,
+				Required:    true,
+				MarkdownDescription: "IDs of SSH keys (`hostd_ssh_key`) to install, from one to five. The VM is reached with these keys: the provider sets a random cloud-init password and does not expose it. " +
+					"Keys are installed only when the VM is created. A later change is recorded without touching the VM, so rotating or renaming a `hostd_ssh_key` never replaces it; update `~/.ssh/authorized_keys` on the guest yourself.",
 				Validators: []validator.Set{
 					setvalidator.SizeBetween(1, 5),
-				},
-				PlanModifiers: []planmodifier.Set{
-					// Empty after import: setting it then must not replace the VM.
-					setplanmodifier.RequiresReplaceIf(
-						func(_ context.Context, req planmodifier.SetRequest, resp *setplanmodifier.RequiresReplaceIfFuncResponse) {
-							resp.RequiresReplace = !req.StateValue.IsNull()
-						},
-						"Changing the SSH keys replaces the VM.",
-						"Changing the SSH keys replaces the VM.",
-					),
 				},
 			},
 			"cores": schema.Int64Attribute{
@@ -193,6 +192,9 @@ func (r *vmResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp 
 				Computed:            true,
 				Default:             stringdefault.StaticString("regular"),
 				MarkdownDescription: "CPU class: `light` or `regular` (default).",
+				Validators: []validator.String{
+					stringvalidator.OneOf("light", "regular"),
+				},
 			},
 			"power_state": schema.StringAttribute{
 				Optional:            true,
@@ -208,6 +210,9 @@ func (r *vmResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp 
 				Computed:            true,
 				Default:             stringdefault.StaticString("dual"),
 				MarkdownDescription: "Public network: `off`, `ipv4`, `ipv6` or `dual` (default). With `off`, attach at least one private network. Switching between `ipv4`, `ipv6` and `dual` requires going through `off`.",
+				Validators: []validator.String{
+					stringvalidator.OneOf("off", "ipv4", "ipv6", "dual"),
+				},
 			},
 			"wan_ip": schema.StringAttribute{
 				Optional:            true,
@@ -437,6 +442,39 @@ func (r *vmResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequ
 	}
 }
 
+func (r *vmResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var data vmResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if attribute, msg := vmSizeError(data.Cores, data.RAMGB, data.OSDiskGB); msg != "" {
+		resp.Diagnostics.AddAttributeError(path.Root(attribute), "Invalid VM size", msg)
+	}
+}
+
+// vmSizeError mirrors the API limits on vCPU, RAM and OS disk size.
+func vmSizeError(cores, ramGB, diskGB types.Int64) (string, string) {
+	if cores.IsNull() || cores.IsUnknown() {
+		return "", ""
+	}
+	c := cores.ValueInt64()
+	if c < 2 || c%2 != 0 {
+		return "cores", fmt.Sprintf("cores must be an even number, at least 2; got %d.", c)
+	}
+	if !ramGB.IsNull() && !ramGB.IsUnknown() {
+		if ram := ramGB.ValueInt64(); ram < c || ram > 4*c {
+			return "ram_gb", fmt.Sprintf("With %d vCPU, ram_gb must be between %d and %d (1 to 4 GiB per vCPU); got %d.", c, c, 4*c, ram)
+		}
+	}
+	if !diskGB.IsNull() && !diskGB.IsUnknown() {
+		if disk := diskGB.ValueInt64(); disk%20 != 0 || disk < 10*c || disk > 100*c {
+			return "os_disk_gb", fmt.Sprintf("With %d vCPU, os_disk_gb must be a multiple of 20 between %d and %d (10 to 100 GiB per vCPU); got %d.", c, 10*c, 100*c, disk)
+		}
+	}
+	return "", ""
+}
+
 func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan, state vmResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -474,9 +512,14 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 	}
 
 	projectID, vmid := plan.ProjectID.ValueString(), plan.VMID.ValueInt64()
-	want := plan.PowerState.ValueString()
-	if want == "stopped" && state.PowerState.ValueString() != "stopped" {
-		if err := r.client.SetPower(ctx, projectID, vmid, "shutdown"); err != nil {
+	want, current := plan.PowerState.ValueString(), state.PowerState.ValueString()
+	if want == "stopped" && current != "stopped" {
+		// A paused guest cannot shut down cleanly.
+		action := "shutdown"
+		if current != "running" {
+			action = "stop"
+		}
+		if err := r.client.SetPower(ctx, projectID, vmid, action); err != nil {
 			resp.Diagnostics.AddError("Error stopping VM", fmt.Sprintf("stopping VM %d: %s", vmid, err))
 			return
 		}
@@ -495,8 +538,12 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 			return
 		}
 	}
-	if want == "running" && state.PowerState.ValueString() != "running" {
-		if err := r.client.SetPower(ctx, projectID, vmid, "start"); err != nil {
+	if want == "running" && current != "running" {
+		action := "start"
+		if current != "stopped" {
+			action = "resume"
+		}
+		if err := r.client.SetPower(ctx, projectID, vmid, action); err != nil {
 			resp.Diagnostics.AddError("Error starting VM", fmt.Sprintf("starting VM %d: %s", vmid, err))
 			return
 		}
@@ -620,6 +667,10 @@ func (m vmResourceModel) lanError(ctx context.Context) string {
 	if diags.HasError() {
 		return ""
 	}
+	wanOff := !m.WANMode.IsUnknown() && m.WANMode.ValueString() == "off"
+	if wanOff && len(lans) == 0 && !m.LANInterfaces.IsUnknown() {
+		return "With wan_mode off, attach at least one private network in lan_interfaces."
+	}
 	gateways := 0
 	for _, lan := range lans {
 		if lan.Mode.IsUnknown() || lan.IP.IsUnknown() || lan.IsGateway.IsUnknown() {
@@ -632,7 +683,7 @@ func (m vmResourceModel) lanError(ctx context.Context) string {
 			gateways++
 		}
 	}
-	if !m.WANMode.IsUnknown() && m.WANMode.ValueString() == "off" && len(lans) > 1 && gateways != 1 {
+	if wanOff && len(lans) > 1 && gateways != 1 {
 		return "When wan_mode is off and more than one private network is attached, set is_gateway on exactly one."
 	}
 	return ""
@@ -654,12 +705,13 @@ func (m *vmResourceModel) setFromAPI(ctx context.Context, vm *client.VM, cfg *cl
 		m.OSDiskGB = types.Int64Value(*cfg.OSDiskGB)
 	}
 	m.CPUMode = types.StringValue(vm.CPUMode)
-	if vm.Status == "running" {
-		m.PowerState = types.StringValue("running")
-	} else {
-		m.PowerState = types.StringValue("stopped")
-	}
+	// Kept as reported (e.g. paused) so the plan shows the change back to power_state.
+	m.PowerState = types.StringValue(vm.Status)
 	m.WANMode = types.StringValue(wanMode(cfg.WAN))
+	if m.RetainPublicIPs.IsNull() {
+		// Not stored by the API; an import starts from the default.
+		m.RetainPublicIPs = types.BoolValue(false)
+	}
 	m.setAddresses(cfg)
 	return m.setLAN(ctx, cfg.LANInterfaces)
 }

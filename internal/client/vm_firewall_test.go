@@ -33,10 +33,15 @@ func TestVMFirewall_requests(t *testing.T) {
 	if method != http.MethodPut || path != "/v1/cloud/project/p/vm/7/firewall/config/" || body["policy_in"] != "DROP" {
 		t.Fatalf("set %s %s %v", method, path, body)
 	}
-	if err := c.DeleteVMFirewallRule(context.Background(), "p", 7, 1); err != nil {
+	group := []FirewallRuleInput{{Type: "group", Action: "web_a3", Enable: true}}
+	if err := c.ReplaceVMFirewallRules(context.Background(), "p", 7, group); err != nil {
 		t.Fatal(err)
 	}
-	if method != http.MethodDelete || path != "/v1/cloud/project/p/vm/7/firewall/rules/" || body["pos"] != float64(1) {
-		t.Fatalf("delete %s %s %v", method, path, body)
+	rule := body["rules"].([]any)[0].(map[string]any)
+	if method != http.MethodPut || path != "/v1/cloud/project/p/vm/7/firewall/rules/replace/" || rule["action"] != "web_a3" {
+		t.Fatalf("replace %s %s %v", method, path, body)
+	}
+	if _, ok := rule["proto"]; ok {
+		t.Fatalf("group rule must not send proto: %v", rule)
 	}
 }

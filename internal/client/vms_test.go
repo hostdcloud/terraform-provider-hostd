@@ -94,23 +94,35 @@ func TestDestroyVM_keepsPublicIPs(t *testing.T) {
 	}
 }
 
-func TestCreateVM_adoptsExistingAfterInterrupt(t *testing.T) {
-	t.Run("adopts the VM with the same hostname", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method == http.MethodPost {
-				hj, ok := w.(http.Hijacker)
-				if !ok {
-					t.Fatal("cannot hijack")
-				}
-				conn, _, err := hj.Hijack()
-				if err != nil {
-					t.Fatal(err)
-				}
-				conn.Close()
-				return
+// interruptedCreate serves list before the POST, drops the POST connection,
+// then serves listAfter.
+func interruptedCreate(t *testing.T, listBefore, listAfter string) *httptest.Server {
+	posted := false
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			posted = true
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatal("cannot hijack")
 			}
-			_, _ = w.Write([]byte(`[{"vmid":9,"name":"web","status":"running","cores":2,"ram_gb":2,"os_disk_gb":20,"cpu_usage":0,"ram_used_mib":0,"cpu_mode":"regular"}]`))
-		}))
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Fatal(err)
+			}
+			conn.Close()
+			return
+		}
+		if posted {
+			_, _ = w.Write([]byte(listAfter))
+			return
+		}
+		_, _ = w.Write([]byte(listBefore))
+	}))
+}
+
+func TestCreateVM_adoptsAfterInterrupt(t *testing.T) {
+	t.Run("adopts the new VM with the hostname", func(t *testing.T) {
+		srv := interruptedCreate(t, `[{"vmid":3,"name":"db"}]`, `[{"vmid":3,"name":"db"},{"vmid":9,"name":"web"}]`)
 		defer srv.Close()
 
 		vmid, err := New(srv.URL, "test", "test").CreateVM(context.Background(), "p", CreateVMInput{Hostname: "web"})
@@ -119,11 +131,23 @@ func TestCreateVM_adoptsExistingAfterInterrupt(t *testing.T) {
 		}
 	})
 
+	t.Run("a VM that already had the hostname is not adopted", func(t *testing.T) {
+		srv := interruptedCreate(t, `[{"vmid":4,"name":"web"}]`, `[{"vmid":4,"name":"web"}]`)
+		defer srv.Close()
+
+		vmid, err := New(srv.URL, "test", "test").CreateVM(context.Background(), "p", CreateVMInput{Hostname: "web"})
+		if err == nil || vmid != 0 {
+			t.Fatalf("got vmid %d err %v, want the interruption error", vmid, err)
+		}
+	})
+
 	t.Run("an API error is not a lookup", func(t *testing.T) {
 		var gets int
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet {
 				gets++
+				_, _ = w.Write([]byte(`[]`))
+				return
 			}
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"hostname":["invalid"]}`))
@@ -132,31 +156,17 @@ func TestCreateVM_adoptsExistingAfterInterrupt(t *testing.T) {
 
 		_, err := New(srv.URL, "test", "test").CreateVM(context.Background(), "p", CreateVMInput{Hostname: "web"})
 		var apiErr *Error
-		if !errors.As(err, &apiErr) || apiErr.Status != http.StatusBadRequest || gets != 0 {
-			t.Fatalf("got err %v after %d GETs, want a 400 and no lookup", err, gets)
+		if !errors.As(err, &apiErr) || apiErr.Status != http.StatusBadRequest || gets != 1 {
+			t.Fatalf("got err %v after %d GETs, want a 400 and only the list before create", err, gets)
 		}
 	})
 
-	t.Run("two VMs with the hostname is an error", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method == http.MethodPost {
-				hj, ok := w.(http.Hijacker)
-				if !ok {
-					t.Fatal("cannot hijack")
-				}
-				conn, _, err := hj.Hijack()
-				if err != nil {
-					t.Fatal(err)
-				}
-				conn.Close()
-				return
-			}
-			_, _ = w.Write([]byte(`[{"vmid":1,"name":"web"},{"vmid":2,"name":"web"}]`))
-		}))
+	t.Run("two new VMs with the hostname is an error", func(t *testing.T) {
+		srv := interruptedCreate(t, `[]`, `[{"vmid":1,"name":"web"},{"vmid":2,"name":"web"}]`)
 		defer srv.Close()
 
 		_, err := New(srv.URL, "test", "test").CreateVM(context.Background(), "p", CreateVMInput{Hostname: "web"})
-		if err == nil || !strings.Contains(err.Error(), "2 VMs") {
+		if err == nil || !strings.Contains(err.Error(), "2 new VMs") {
 			t.Fatalf("got %v", err)
 		}
 	})

@@ -66,8 +66,8 @@ func (r *ipSetResource) Configure(_ context.Context, req resource.ConfigureReque
 
 func (r *ipSetResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "A project firewall IP set: a named list of addresses that rules reference as `+pve_ipset_name`. " +
-			"Deleting the set also removes VM and security-group rules that use it. Import with `<project_id>,<id>`.",
+		MarkdownDescription: "A project firewall IP set: a named list of addresses that rules reference as `+pve_ipset_name`. Addresses are `hostd_ip_set_member`. " +
+			"Only `comment` changes in place. Deleting the set also removes VM and security-group rules that use it. Import with `<project_id>,<id>`.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -85,9 +85,12 @@ func (r *ipSetResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 			},
 			"name": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "Name: a lowercase letter, then up to 14 letters, digits, hyphens or underscores. The API stores it in lower case.",
+				MarkdownDescription: "Name: a lowercase letter, then up to 14 letters, digits, hyphens or underscores. An IP set cannot be renamed, so changing it replaces the set.",
 				Validators: []validator.String{
 					stringvalidator.RegexMatches(ipSetNamePattern, "must start with a lowercase letter and contain only lowercase letters, digits, hyphens and underscores, at most 15 characters"),
+				},
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
 				},
 			},
 			"comment": schema.StringAttribute{
@@ -157,14 +160,12 @@ func (r *ipSetResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		return
 	}
 
-	set, err := r.client.UpdateIPSet(ctx, data.ProjectID.ValueString(), data.ID.ValueString(), data.Name.ValueString(), data.Comment.ValueString())
+	set, err := r.client.UpdateIPSet(ctx, data.ProjectID.ValueString(), data.ID.ValueString(), data.Comment.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("Error updating IP set", fmt.Sprintf("updating IP set (%s): %s", data.ID.ValueString(), err))
 		return
 	}
-	data.Name = types.StringValue(set.DisplayName)
 	data.Comment = types.StringValue(set.Comment)
-	data.PVEIPSetName = types.StringValue(set.PVEIPSetName)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }

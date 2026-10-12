@@ -3,12 +3,12 @@
 page_title: "hostd_ip_set Resource - hostd"
 subcategory: ""
 description: |-
-  A project firewall IP set: a named list of addresses that rules reference as +pve_ipset_name. Deleting the set also removes VM and security-group rules that use it. Import with <project_id>,<id>.
+  A project firewall IP set: a named list of addresses that rules reference as +pve_ipset_name. Addresses are hostd_ip_set_member. Only comment changes in place. Deleting the set also removes VM and security-group rules that use it. Import with <project_id>,<id>.
 ---
 
 # hostd_ip_set (Resource)
 
-A project firewall IP set: a named list of addresses that rules reference as `+pve_ipset_name`. Deleting the set also removes VM and security-group rules that use it. Import with `<project_id>,<id>`.
+A project firewall IP set: a named list of addresses that rules reference as `+pve_ipset_name`. Addresses are `hostd_ip_set_member`. Only `comment` changes in place. Deleting the set also removes VM and security-group rules that use it. Import with `<project_id>,<id>`.
 
 ## Example Usage
 
@@ -25,7 +25,7 @@ resource "hostd_ip_set" "office" {
 
 ### Required
 
-- `name` (String) Name: a lowercase letter, then up to 14 letters, digits, hyphens or underscores. The API stores it in lower case.
+- `name` (String) Name: a lowercase letter, then up to 14 letters, digits, hyphens or underscores. An IP set cannot be renamed, so changing it replaces the set.
 - `project_id` (String) UUID of the project (`hostd_project`) the set belongs to.
 
 ### Optional
@@ -36,3 +36,13 @@ resource "hostd_ip_set" "office" {
 
 - `id` (String) IP set UUID.
 - `pve_ipset_name` (String) Identifier firewall rules use, prefixed with `+`.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+terraform import hostd_ip_set.office 0b6e5f7c-4f4e-4a43-9c0e-6f4d3b2a1c90,7c9e1d2f-3a4b-4c5d-8e6f-0a1b2c3d4e5f
+```
