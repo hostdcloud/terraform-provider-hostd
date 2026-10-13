@@ -45,7 +45,7 @@ func (p *hostdProvider) Metadata(_ context.Context, _ provider.MetadataRequest, 
 
 func (p *hostdProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "The hostd provider manages [hostd.cloud](https://hostd.cloud) Public Cloud — projects, SSH keys, virtual machines and their firewall — through the public API.",
+		MarkdownDescription: "The hostd provider manages [hostd.cloud](https://hostd.cloud) Public Cloud – projects, SSH keys, virtual machines and their firewall – through the public API.",
 		Attributes: map[string]schema.Attribute{
 			// Authentication attributes are Optional (never Required) so
 			// environment variables can supply them; secrets are Sensitive.

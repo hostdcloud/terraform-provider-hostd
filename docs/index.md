@@ -1,12 +1,12 @@
 ---
 page_title: "hostd Provider"
 description: |-
-  The hostd provider manages hostd.cloud https://hostd.cloud Public Cloud — projects, SSH keys, virtual machines and their firewall — through the public API.
+  The hostd provider manages hostd.cloud https://hostd.cloud Public Cloud – projects, SSH keys, virtual machines and their firewall – through the public API.
 ---
 
 # hostd Provider
 
-The hostd provider manages [hostd.cloud](https://hostd.cloud) Public Cloud — projects, SSH keys, virtual machines and their firewall — through the public API.
+The hostd provider manages [hostd.cloud](https://hostd.cloud) Public Cloud – projects, SSH keys, virtual machines and their firewall – through the public API.
 
 ## Example Usage
 
