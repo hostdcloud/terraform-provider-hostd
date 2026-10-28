@@ -181,7 +181,7 @@ func (r *vmResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp 
 			},
 			"ram_gb": schema.Int64Attribute{
 				Required:            true,
-				MarkdownDescription: "RAM in GiB; between 1 and 4 GiB per vCPU.",
+				MarkdownDescription: "RAM in GiB, in steps of 2 GiB; between 1 and 4 GiB per vCPU.",
 			},
 			"os_disk_gb": schema.Int64Attribute{
 				Required:            true,
@@ -463,8 +463,8 @@ func vmSizeError(cores, ramGB, diskGB types.Int64) (string, string) {
 		return "cores", fmt.Sprintf("cores must be an even number, at least 2; got %d.", c)
 	}
 	if !ramGB.IsNull() && !ramGB.IsUnknown() {
-		if ram := ramGB.ValueInt64(); ram < c || ram > 4*c {
-			return "ram_gb", fmt.Sprintf("With %d vCPU, ram_gb must be between %d and %d (1 to 4 GiB per vCPU); got %d.", c, c, 4*c, ram)
+		if ram := ramGB.ValueInt64(); ram%2 != 0 || ram < c || ram > 4*c {
+			return "ram_gb", fmt.Sprintf("With %d vCPU, ram_gb must be a multiple of 2 between %d and %d (1 to 4 GiB per vCPU); got %d.", c, c, 4*c, ram)
 		}
 	}
 	if !diskGB.IsNull() && !diskGB.IsUnknown() {

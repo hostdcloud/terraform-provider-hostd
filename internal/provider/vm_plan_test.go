@@ -124,10 +124,12 @@ func TestVMSizeError(t *testing.T) {
 	}{
 		{2, 4, 20, ""},
 		{4, 16, 400, ""},
+		{4, 10, 40, ""},
 		{3, 4, 40, "cores"},
 		{0, 4, 40, "cores"},
 		{2, 1, 20, "ram_gb"},
 		{2, 9, 20, "ram_gb"},
+		{4, 5, 40, "ram_gb"},
 		{2, 4, 30, "os_disk_gb"},
 		{4, 8, 20, "os_disk_gb"},
 		{2, 4, 220, "os_disk_gb"},

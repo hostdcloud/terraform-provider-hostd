@@ -43,7 +43,7 @@ output "web_ipv4" {
 - `os_disk_gb` (Number) OS disk size in GiB, in steps of 20 GiB; between 10 and 100 GiB per vCPU. It cannot shrink.
 - `os_image` (String) Image name available in the project, e.g. `debian-12-amd64.qcow2`. List the available names with the `hostd_os_images` data source.
 - `project_id` (String) UUID of the project (`hostd_project`) the VM belongs to.
-- `ram_gb` (Number) RAM in GiB; between 1 and 4 GiB per vCPU.
+- `ram_gb` (Number) RAM in GiB, in steps of 2 GiB; between 1 and 4 GiB per vCPU.
 - `ssh_key_ids` (Set of Number) IDs of SSH keys (`hostd_ssh_key`) to install, from one to five. The VM is reached with these keys: the provider sets a random cloud-init password and does not expose it. Keys are installed only when the VM is created. A later change is recorded without touching the VM, so rotating or renaming a `hostd_ssh_key` never replaces it; update `~/.ssh/authorized_keys` on the guest yourself.
 
 ### Optional
